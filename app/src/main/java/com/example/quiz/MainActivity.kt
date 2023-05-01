@@ -4,10 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -15,15 +18,31 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quiz.ui.theme.QuizTheme
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
+import kotlinx.serialization.*
+import kotlinx.serialization.json.Json
+import java.net.URLDecoder
+
 
 enum class State {
     SelectQuiz,
+    Loading,
     AnswerQuestions,
 }
 
+@Serializable
+data class ApiResponse(
+    val results: List<Question>
+)
+
+@Serializable
 data class Question(
     val question: String,
+    @SerialName("correct_answer")
     val correctAnswer: String,
+    @SerialName("incorrect_answers")
     val incorrectAnswers: List<String>,
 )
 
@@ -31,26 +50,39 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val (state, changeState) = rememberSaveable { mutableStateOf(State.AnswerQuestions) }
+            val (state, changeState) = rememberSaveable { mutableStateOf(State.SelectQuiz) }
+            val (questions, changeQuestions) = rememberSaveable { mutableStateOf(listOf<Question>()) }
             QuizTheme {
-                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(all = 16.dp),
                     color = MaterialTheme.colors.background
                 ) {
-                    if(state == State.SelectQuiz) {
-                        SelectQuiz{ _, _ ->
-                            changeState(State.AnswerQuestions)
+                    when (state) {
+                        State.SelectQuiz -> {
+                            SelectQuiz { difficulty, category ->
+                                thread {
+                                    loadQuestions(difficulty, category){ questions ->
+                                        changeQuestions(questions)
+                                        changeState(State.AnswerQuestions)
+                                    }
+                                }
+                                changeState(State.Loading)
+                            }
                         }
-                    } else if(state == State.AnswerQuestions) {
-                        val questions = listOf(
-                            Question("Where is A?", "A", listOf("B", "C", "D")),
-                            Question("Where is B?", "B", listOf("A", "C", "D")),
-                            Question("Where is C?", "C", listOf("A", "B", "D")),
-                        )
-                        AnswerQuestions(questions){ changeState(State.SelectQuiz) }
+                        State.Loading -> {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text("Loading")
+                            }
+                        }
+                        State.AnswerQuestions -> {
+                            AnswerQuestions(questions){ changeState(State.SelectQuiz) }
+                        }
                     }
                 }
             }
@@ -58,20 +90,57 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable
-fun SelectQuiz(startQuiz: (String, String) -> Unit) {
-    val (difficulty, updateDifficulty) = rememberSaveable { mutableStateOf("Medium") }
-    val (category, updateCategory) = rememberSaveable { mutableStateOf("Books") }
-    val categories = listOf(
-        "Books",
-        "Film",
-        "Music",
-        "Musicals & Theatre",
-        "Television",
-        "Video Games",
-        "Board Games"
+fun loadQuestions(difficulty: String, category: Int, setQuestions: (List<Question>) -> Unit) {
+    val url = URL(
+        "https://opentdb.com/api.php?amount=10&encode=url3986" +
+                "&type=multiple" +
+                "&difficulty=${difficulty.lowercase()}" +
+                "&category=$category"
     )
-    Column {
+
+    with(url.openConnection() as HttpURLConnection) {
+        inputStream.bufferedReader().use {
+            val response = it.readText()
+            val json = Json{
+                ignoreUnknownKeys = true
+            }
+            val jsonResponse = json.decodeFromString<ApiResponse>(response)
+            setQuestions(jsonResponse.results)
+        }
+    }
+}
+
+@Composable
+fun SelectQuiz(startQuiz: (String, Int) -> Unit) {
+    val (difficulty, updateDifficulty) = rememberSaveable { mutableStateOf("Medium") }
+    val categories = mapOf(
+        "General Knowledge" to 9,
+        "Books" to 10,
+        "Film" to 11,
+        "Music" to 12,
+        "Musicals and Theatre" to 13,
+        "Television" to 14,
+        "Video Games" to 15,
+        "Board Games" to 16,
+        "Science & Nature" to 17,
+        "Computers" to 18,
+        "Mathematics" to 19,
+        "Mythology" to 20,
+        "Sports" to 21,
+        "Geography" to 22,
+        "History" to 23,
+        "Politics" to 24,
+        "Art" to 25,
+        "Celebrities" to 26,
+        "Animals" to 27,
+        "Vehicles" to 28,
+        "Comics" to 29,
+        "Gadgets" to 30,
+        "Anime & Manga" to 31,
+        "Cartoon & Animation" to 32,
+    )
+    val (category, updateCategory) = rememberSaveable { mutableStateOf(categories.keys.first()) }
+    Column(Modifier.verticalScroll(rememberScrollState())) {
         Heading("Difficulty")
         RadioButtons(
             update = updateDifficulty,
@@ -82,9 +151,9 @@ fun SelectQuiz(startQuiz: (String, String) -> Unit) {
         RadioButtons(
             update = updateCategory,
             value = category,
-            options = categories
+            options = categories.keys.toList()
         )
-        Button(onClick = { startQuiz(difficulty, category)}) {
+        Button(onClick = { categories[category]?.let { startQuiz(difficulty, it) } }) {
             Text("Start")
         }
     }
@@ -132,7 +201,14 @@ fun Heading(text: String) {
 fun AnswerQuestions(questions: List<Question>, finished: () -> Unit) {
     val (questionIndex, updateQuestionIndex) = rememberSaveable { mutableStateOf(0) }
     val question = questions[questionIndex]
-    ShowQuestion(questionIndex, question) {
+    ShowQuestion(
+        questionIndex,
+        URLDecoder.decode(question.question, "utf-8"),
+        URLDecoder.decode(question.correctAnswer, "utf-8"),
+        answers = (question.incorrectAnswers + question.correctAnswer)
+            .shuffled()
+            .map { URLDecoder.decode(it, "utf-8")}
+    ) {
         if(questionIndex+1 == questions.size){
             finished()
         }
@@ -142,15 +218,24 @@ fun AnswerQuestions(questions: List<Question>, finished: () -> Unit) {
 
 
 @Composable
-fun ShowQuestion(index: Int, question: Question, next: () -> Unit) {
-    val answers = rememberSaveable{ (question.incorrectAnswers + question.correctAnswer).shuffled()}
-    val (selectedAnswer, updateAnswer) = rememberSaveable { mutableStateOf(answers[0]) }
+fun ShowQuestion(
+    index: Int,
+    question: String,
+    correctAnswer: String,
+    answers: List<String>,
+    next: () -> Unit
+) {
+    val (selectedAnswer, updateAnswer) = remember { mutableStateOf(answers[0]) }
     val answerQuestion = rememberSaveable { mutableStateOf(true) }
     if(answerQuestion.value) {
         Column {
             Heading("Question ${index+1}")
-            Text(question.question)
-            RadioButtons(update = updateAnswer, value = selectedAnswer, options = answers)
+            Text(question)
+            RadioButtons(
+                update = updateAnswer,
+                value = selectedAnswer,
+                options = answers
+            )
             Button(onClick = {
                 answerQuestion.value = false
             }) {
@@ -159,7 +244,7 @@ fun ShowQuestion(index: Int, question: Question, next: () -> Unit) {
         }
     } else {
         Column {
-            val text = if(selectedAnswer == question.correctAnswer) {
+            val text = if(selectedAnswer == correctAnswer) {
                 "Correct"
             } else { "Wrong answer" }
             Text(text)
