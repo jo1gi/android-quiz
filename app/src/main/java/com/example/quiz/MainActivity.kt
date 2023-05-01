@@ -16,10 +16,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quiz.ui.theme.QuizTheme
 
+enum class State {
+    SelectQuiz,
+    AnswerQuestions,
+}
+
+data class Question(
+    val question: String,
+    val correctAnswer: String,
+    val incorrectAnswers: List<String>,
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
+            val (state, changeState) = rememberSaveable { mutableStateOf(State.AnswerQuestions) }
             QuizTheme {
                 // A surface container using the 'background' color from the theme
                 Surface(
@@ -28,9 +40,17 @@ class MainActivity : ComponentActivity() {
                         .padding(all = 16.dp),
                     color = MaterialTheme.colors.background
                 ) {
-                    SelectQuiz{ difficulty, category ->
-                        println("Difficulty: $difficulty")
-                        println("Category: $category")
+                    if(state == State.SelectQuiz) {
+                        SelectQuiz{ _, _ ->
+                            changeState(State.AnswerQuestions)
+                        }
+                    } else if(state == State.AnswerQuestions) {
+                        val questions = listOf(
+                            Question("Where is A?", "A", listOf("B", "C", "D")),
+                            Question("Where is B?", "B", listOf("A", "C", "D")),
+                            Question("Where is C?", "C", listOf("A", "B", "D")),
+                        )
+                        AnswerQuestions(questions){ changeState(State.SelectQuiz) }
                     }
                 }
             }
@@ -105,4 +125,50 @@ fun Heading(text: String) {
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 20.dp),
     )
+}
+
+
+@Composable
+fun AnswerQuestions(questions: List<Question>, finished: () -> Unit) {
+    val (questionIndex, updateQuestionIndex) = rememberSaveable { mutableStateOf(0) }
+    val question = questions[questionIndex]
+    ShowQuestion(questionIndex, question) {
+        if(questionIndex+1 == questions.size){
+            finished()
+        }
+        updateQuestionIndex(questionIndex+1)
+    }
+}
+
+
+@Composable
+fun ShowQuestion(index: Int, question: Question, next: () -> Unit) {
+    val answers = rememberSaveable{ (question.incorrectAnswers + question.correctAnswer).shuffled()}
+    val (selectedAnswer, updateAnswer) = rememberSaveable { mutableStateOf(answers[0]) }
+    val answerQuestion = rememberSaveable { mutableStateOf(true) }
+    if(answerQuestion.value) {
+        Column {
+            Heading("Question ${index+1}")
+            Text(question.question)
+            RadioButtons(update = updateAnswer, value = selectedAnswer, options = answers)
+            Button(onClick = {
+                answerQuestion.value = false
+            }) {
+                Text("Answer")
+            }
+        }
+    } else {
+        Column {
+            val text = if(selectedAnswer == question.correctAnswer) {
+                "Correct"
+            } else { "Wrong answer" }
+            Text(text)
+            Button(onClick = {
+                answerQuestion.value = true
+                next()
+            }) {
+                Text("Next")
+            }
+        }
+    }
 }
